@@ -1,4 +1,4 @@
-use std::usize;
+use std::{usize};
 
 use ark_ff::{PrimeField};
 use ark_r1cs_std::{
@@ -21,15 +21,15 @@ mod alloc;
 pub struct Puzzle<const N: usize, ConstraintF: PrimeField>([[UInt8<ConstraintF>; N]; N]);
 pub struct Solution<const N: usize, ConstraintF: PrimeField>([[UInt8<ConstraintF>; N]; N]);
 
-struct SudokuVerifierCircuit<'a, const N: usize>{
+struct SudokuVerifier<'a, const N: usize>{
     puzzle: &'a [[u8; N]; N], 
     solution: &'a [[u8; N]; N],
 }
 
-impl <'a, const N: usize, F: PrimeField> ConstraintSynthesizer<F> for SudokuVerifierCircuit<'a, N> {
+impl <'a, const N: usize, F: PrimeField> ConstraintSynthesizer<F> for SudokuVerifier<'a, N> {
     fn generate_constraints(self, cs: ConstraintSystemRef<F>) -> Result<(), SynthesisError> { 
-        let puzzle_var = Puzzle::new_input(cs.clone(), || Ok(self.puzzle)).unwrap();
-        let solution_var = Solution::new_witness(cs.clone(), || Ok(self.solution)).unwrap();
+        let puzzle_var = Puzzle::new_input(ark_relations::ns!(cs, "puzzle"), || Ok(self.puzzle)).unwrap();
+        let solution_var = Solution::new_witness(ark_relations::ns!(cs, "solution"), || Ok(self.solution)).unwrap();
         check_puzzle_matches_solution(&puzzle_var, &solution_var).unwrap();
         check_rows(&solution_var).unwrap();
         Ok(())
@@ -70,24 +70,6 @@ fn check_puzzle_matches_solution<const N: usize, ConstraintF: PrimeField>(
     Ok(())
 }
 
-fn check_helper<const N: usize, ConstraintF: PrimeField>(
-    puzzle: &[[u8; N]; N],
-    solution: &[[u8; N]; N],
-) {
-    let cs = ConstraintSystem::<ConstraintF>::new_ref();
-    let puzzle_var = Puzzle::new_input(cs.clone(), || Ok(puzzle)).unwrap();
-    let solution_var = Solution::new_witness(cs.clone(), || Ok(solution)).unwrap();
-    check_puzzle_matches_solution(&puzzle_var, &solution_var).unwrap();
-    check_rows(&solution_var).unwrap();
-    let is_satisfied = cs.is_satisfied().unwrap();
-    if !is_satisfied {
-        // If it isn't, find out the offending constraint.
-        println!("{:?}", cs.which_is_unsatisfied());
-    }
-    assert!(is_satisfied);
-}
-
-
 fn test_groth16<const N: usize>(
     puzzle: &[[u8; N]; N],
     solution: &[[u8; N]; N],
@@ -98,18 +80,26 @@ fn test_groth16<const N: usize>(
 
     println!("Creating parameters...");
     
+    // TODO why on other examples online we create empty inputs and witnesses?
+    // e.g., https://github.com/arkworks-rs/groth16/blob/master/tests/mimc.rs
+    // https://github.com/arkworks-rs/r1cs-tutorial/blob/5d3a9022fb6deade245505748fd661278e9c0ff9/rollup/src/rollup.rs
+    // https://github.com/dev0x1/arkwork-examples
+    let empty_value: u8 = 0;
+    let row = [(); N].map(|_| empty_value);
+    let puzzle_empty = [(); N].map(|_| row.clone()); 
+    println!("{:?}", puzzle_empty);
+
     // Create parameters for our circuit
     let (pk, vk) = {
-        let c = SudokuVerifierCircuit::<N> {
-            puzzle: puzzle,
-            solution: solution
+        let c = SudokuVerifier::<N> {
+            puzzle: &puzzle_empty,
+            solution: &puzzle_empty
         };
-
         Groth16::<Bls12_381>::setup(c, &mut rng).unwrap()
     };
 
     println!("Creating proofs...");
-    let c = SudokuVerifierCircuit::<N> {
+    let c = SudokuVerifier::<N> {
         puzzle: puzzle,
         solution: solution
     };
@@ -119,31 +109,30 @@ fn test_groth16<const N: usize>(
     let pvk = Groth16::<Bls12_381>::process_vk(&vk).unwrap();
 
     let proof = Groth16::<Bls12_381>::prove(&pk, c, &mut rng).unwrap();
-    
-    // TODO non funziona la verifica... sicuro gli passo male l'input
+
+    let public_input =  [
+        Fr::from(puzzle[0][0]), Fr::from(puzzle[0][1]), Fr::from(puzzle[1][0]), Fr::from(puzzle[1][1])
+    ];
+
+    // TODO verification is not working... is it a problem with the verification key or the inputs?
     assert!(Groth16::<Bls12_381>::verify_proof(&pvk, &proof, 
-        &[(puzzle[0][0])] 
-        // &[Fr::from(puzzle[0][0]), Fr::from(puzzle[0][1]), Fr::from(puzzle[1][0]), Fr::from(puzzle[1][1])] 
+        &public_input 
+        // &[] 
     ).unwrap());
 }
 
 
 fn main()  {
     // Check that it accepts a valid solution.
-    // let puzzle = [
-    //     [1, 0],
-    //     [0, 2],
-    // ];
-    // let solution = [
-    //     [1, 2],
-    //     [1, 2],
-    // ];
+    let puzzle = [
+        [1, 0],
+        [0, 2],
+    ];
+    let solution = [
+        [1, 2],
+        [1, 2],
+    ];
 
-    let puzzle = [[0]];
-    let solution = [[1]];
-    check_helper::<1, F>(&puzzle, &solution);
-
-    test_groth16::<1>(&puzzle, &solution);
+    test_groth16::<2>(&puzzle, &solution);
 }
-
 
