@@ -1,3 +1,7 @@
+***THE LATEST VERSION OF THE TUTORIAL MIGHT BE AVAILABLE AT THIS [LINK](https://hackmd.io/@LsH8lGjzQEiZJROqMMzmCA/Syfsi97Uh)!*** 
+
+***Please, refer to it.***
+
 # Arkworks Circuit Development Tutorial
 
 [Arkworks](https://github.com/arkworks-rs) is a new framework based on Rust for creating zkSNARKs with different proof system (e.g., Groth16, Marlin, ...). Libraries in the arkworks ecosystem provide efficient implementations of all components required to implement zkSNARK applications, from generic finite fields to R1CS constraints for common functionalities.
