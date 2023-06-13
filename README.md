@@ -3,19 +3,19 @@
 [Arkworks](https://github.com/arkworks-rs) is a new framework based on Rust for creating zkSNARKs with different proof system (e.g., Groth16, Marlin, ...). Libraries in the arkworks ecosystem provide efficient implementations of all components required to implement zkSNARK applications, from generic finite fields to R1CS constraints for common functionalities.
 
 
-However, it seems difficult to find online in-depth analysis of how Arkworks works and a boilerplate to describe how to setup a project for beginners. Through the analysis of a [sudoku verification system](https://github.com/rdi-berkeley/zkp-course-lecture3-code/tree/main/arkworks), I would like to gain sufficient knowledge to design a reasonable boilerplate for starting a new arkwork project.
+However, it seems difficult to find online in-depth analysis of how Arkworks works and a boilerplate to describe how to setup a project for beginners. Through the analysis of a [sudoku verification system](https://github.com/marcozecchini/arkworks-tutorial), I would like to gain sufficient knowledge to design a reasonable boilerplate for starting a new arkwork project.
 
 In general, I assume that the reader has no many notions on Rust. Indeed, this is a new language and all its new functionalities and expressions might seem difficult to read for someone that is used to Python or Javascript.
 
-## Arkwork general concept
+## Constraint systems
 
-![./img/cs](img/cs.png)
+![cs](https://hackmd.io/_uploads/BkkuWo7L3.png)
 
 Arkworks allows developers to initialize the circuit in a *host* language which is **Rust**. In this library there is one key type (i.e., the enabler of the framework) which is `Constraint System` that is in charge for mantaining state of the R1CS system while you build it up. More into details, it contains the representation of the matrices of R1CS `A`, `B` and `C` and a `variable` space. Then, it provides three main operations: 1) create a variable (`cs.add_var(p,v) -> id`), 2) create linear combinations from these variables (`cs.zero(); lc.add(c, id) -> lc'` corresponding to `lc' = lc + c *id`) and 3) add constraints to the matrices (`cs.constrain(lc_a, lc_b, lc_c)`).
 
 On top of these three simple operations, the library has been developed to *allocate* in the constraint system basic type variables (*boolean*, *uint*, *uint8*, ...) and verify operations on them with *gadgets*. From the gadgets we add the constraints to the proof system. 
 
-### Arkworks setup
+## Arkworks setup
 To initialize an Arkworks project in Rust do the following step:
 
 1. Initialize a Rust project with `cargo new <name-of-the-project>`
@@ -28,6 +28,7 @@ ark-bls12-381 = { version = "0.4" }
 ark-r1cs-std = { version = "0.4" }
 ark-snark = { version = "0.4" }
 ark-relations = { version = "0.4" }
+ark-groth16 = { version = "0.4" }
 
 [dev-dependencies]
 itertools = "0.10.1"
@@ -39,10 +40,12 @@ itertools = "0.10.1"
     * `ark-ff` providing finite field arithmetics
     * `ark-ec` providing elliptic curve arithmetics
     * `ark-relations` providing constraint system APIs. This is the library containing the `ConstraintSytem` object and all the methods for creating new linear combinations, variables, constraints and enforcing equalities. 
-![libraries](img/library.png)
+    * `ark-snark` provide all the traits (i.e., interfaces) used by different proof systems.
+    * `ark-groth16` provide all the functions to interact with the Groth16 proof system. There are several proof systems available in Arkworks. Indeed, on Arkworks, is easy to switch from on proof system to another. 
+![libraries](https://hackmd.io/_uploads/rk9QMiXLh.png)
 
 
-### Tutorial
+## Tutorial
 
 In this tutorial, we show how to realize a circuit that verifies that the prover knows a solution for a specific sudoku puzzle. 
 
@@ -53,18 +56,23 @@ We split the tutorial into 5 parts:
 4) [***Interaction with the constrain system and testing***](#4-Interaction-with-the-constraint-system-and-testing) where we investigate how to test and verify the correctness of a witness.
 5) [***Building a Groth16 SNARK proof***](#5-Building-a-Groth16-SNARK-proof) where we compute a Groth16 SNARK proof for our circuit.
 
-#### 1) Environmental setup
+### 1) Environmental setup
 
 The project has three files: `src/main.rs`, `src/cmp.rs` and `src/alloc.rs`. In `src/main.rs`, we have the main program and the auxiliary function to build the circuit. In `src/alloc.rs`, we define the [traits and implementations](#Inherent-implementations-and-Trait-implementations-~OOP-programming)) to allocate the variable. In `src/cmp.rs`, we have the gadget for verifying the correctness of the witness.
 
 In every module of the project, we start importing the necessary libraries from arkworks along with the modules defined in the same directory. For instance, in `src/main.rs`, we import:
 ```rust
-use ark_ff::PrimeField;
+use ark_ff::{PrimeField};
 use ark_r1cs_std::{
     prelude::{Boolean, EqGadget, AllocVar},
-    uint8::UInt8
+    uint8::UInt8,
 };
-use ark_relations::r1cs::{SynthesisError, ConstraintSystem};
+use ark_bls12_381::{Fq as F, Bls12_381, Fr};
+use ark_groth16::Groth16;
+use ark_relations::r1cs::{ConstraintSynthesizer, SynthesisError, ConstraintSystemRef, ConstraintSystem};
+use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
+use ark_std::rand::{SeedableRng, RngCore};
+
 use cmp::CmpGadget;
 
 mod cmp;
@@ -72,7 +80,7 @@ mod alloc;
 ```
 Using the keyword [`mod`](#Module-system-management-in-Rust) we import in `src/main.rs` all the defined functions and variable definitions in `src/cmp.rs` and `src/alloc.rs`.
 
-#### 2) Variable allocations
+### 2) Variable allocations
 
 In the `src/main.rs` file, we define the two structs that represents the puzzle of the sudoku and its solution.
 ```rust
@@ -131,7 +139,7 @@ fn check_helper<const N: usize, ConstraintF: PrimeField>(
 }
 ```
 
-#### 3) Constraint addition through Gadgets
+### 3) Constraint addition through Gadgets
 
 After having declared and initialized the variables in the proper space of the constraint system, we need to define the linear combinations and the constraints. In `check_helper`, we invoke two functions `check_rows` to check that no number is repeated in a row of the sudoku solution and `check_puzzle_matches_solutions` to check that the sudoku provided solution refers to proper puzzle. 
 
@@ -202,7 +210,7 @@ In general, we can consider:
 
 In the following subsection, we will dig into the details of both components 1) and 2) to deeply understand how constraints are defined and verified in Arkworks.
 
-##### CmpGadget and Gadgets
+#### CmpGadget and Gadgets
 
 Gadgets in arkworks are subcircuits corresponding to useful computations that can be used to build up the full circuit.
 
@@ -290,7 +298,7 @@ assert_eq!(iter.next(), None);
 
 The output of the `is_lt` function, invoked somehow also by the other functions of the trait, is a `Boolean` type of the Arkworks library. We will use it to build a constraint in the proof system.
 
-##### Constraint enforcement
+#### Constraint enforcement
 
 The second component of our verification mechanism invokes the `enforce_equal` function. As we said it adds a constraint in the proof system. It is a method on `self.Boolean` taking as input another `Boolean` value (in our case, it is `Boolean::TRUE`). It recursively calls a stack of functions until we reach the `conditional_enforce_equal` of `EqGadget` implementation for `Boolean` that invokes  `cs.enforce_constraint(lc!() + difference, condition.lc(), lc!())?;` adding the constraint. `enforce_constraint` takes as input three linear combinations.
 
@@ -356,7 +364,7 @@ impl<F: Field> EqGadget<F> for Boolean<F> {
 }
 ```
 
-#### 4) Interaction with the constraint system and testing
+### 4) Interaction with the constraint system and testing
 
 Until now we have allocated the new variables and added the constraints in the proof system. We can now evaluate valid witnesses for the circuit. This task can be perfomed very easily. We initialize the Constraint System running the command ```let cs = ConstraintSystem::<ConstraintF>::new_ref();``` and evaluate its correctness with the command `cs.is_satisfied().unwrap()`.
 
@@ -388,21 +396,208 @@ fn main() {
     // In this way, we are more efficient and are side-effecting on them.
     check_helper::<2, F>(&puzzle, &solution);
 
-    /// TODO create the proof
+    println!("\n=======================================\n");
+    check_helper::<2, F>(&puzzle, &solution);
+    println!("\n=======================================\n");
+    test_groth16::<2>(&puzzle, &solution);
 }
 ```
 
 
-#### 5) Building a Groth16 SNARK proof
+### 5) Building a Groth16 SNARK proof
 
-We only miss to create the proof.
-> TODO
+We only miss to create the proof. We want to create a proof for the [Groth16 system](https://eprint.iacr.org/2016/260.pdf). Arkworks allows to interact with [different proofs system](https://github.com/arkworks-rs#snark-proving-systems) adopting the R1CS arithmatization with different characteristics (universal setup, faster prover, ...). 
 
-* https://github.com/nikkolasg/ark-dkg/blob/main/benches/bench.rs
-* https://github.com/arkworks-rs/groth16/blob/master/tests/mimc.rs
-* https://github.com/dev0x1/arkwork-examples
+In the last command of the `main()`, we invoke the `test_groth16` function. It takes as input the matrices representing as `u8` the puzzle and the solution of the sudoku. Hence, it takes the same input of `check_helper`.
+
+```rust
+fn test_groth16<const N: usize>(
+    puzzle: &[[u8; N]; N],
+    solution: &[[u8; N]; N],
+)  {
+    // This may not be cryptographically safe, use
+    // `OsRng` (for example) in production software.
+    let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(ark_std::test_rng().next_u64());
+
+    println!("Creating parameters...");
+    
+    // We create empty inputs and witnesses
+    let empty_value: u8 = 0;
+    let row = [(); N].map(|_| empty_value);
+    let puzzle_empty = [(); N].map(|_| row.clone()); 
+    println!("{:?}", puzzle_empty);
+
+    // Create parameters for our circuit
+    let (pk, vk) = {
+        let c = SudokuVerifier::<N> {
+            puzzle: &puzzle_empty,
+            solution: &puzzle_empty
+        };
+        Groth16::<Bls12_381>::setup(c, &mut rng).unwrap()
+    };
+
+    // ... See later ...
+
+}
+```
+
+The first relavant operation performed by `test_groth16` is to setting up the circuit. To perform this operation it creates a variable `c` of type `SudokuVerifier` (it is not important that is the witness yet!) and invokes the function `Groth16::<Bls12_381>::setup(c, &mut rng).unwrap()`. `setup` takes as input the variable `c` and a randomness `rng`. 
+
+`SudokuVerifier` is a struct defined in `main.rs` grouping the puzzle and solution matrices. We need to create it make to implement for it the `ConstraintSynthesizer` traits. In particular, we need to implement the method `generate_constraints` on the `SudokuVerifier` that takes as input a reference to constraint system. The behavior of this function is the same of `check_helper`, thus, we refer to section ["*Constraint addition through Gadgets*"](#3-Constraint-addition-through-Gadgets) for more details about it. 
+
+In general, every circuit, on which will be invoked a specific setup (is it needed also for other proof system?), needs to inherit the `ConstraintSynthesizer` and implement the `generate_constraints` function for its specific circuit adding the correct contraint to the system. Indeed, the cascade of functions generated by `setup` eventually invokes `generate_constraints`. When, `setup` completes returns the proving key and the verification key. 
+
+```rust
+struct SudokuVerifier<'a, const N: usize>{
+    puzzle: &'a [[u8; N]; N], 
+    solution: &'a [[u8; N]; N],
+}
+
+impl <'a, const N: usize, F: PrimeField> ConstraintSynthesizer<F> for SudokuVerifier<'a, N> {
+    fn generate_constraints(self, cs: ConstraintSystemRef<F>) -> Result<(), SynthesisError> { 
+        let puzzle_var = Puzzle::new_input(ark_relations::ns!(cs, "puzzle"), || Ok(self.puzzle)).unwrap();
+        let solution_var = Solution::new_witness(ark_relations::ns!(cs, "solution"), || Ok(self.solution)).unwrap();
+        check_puzzle_matches_solution(&puzzle_var, &solution_var).unwrap();
+        check_rows(&solution_var).unwrap();
+        Ok(())
+    }
+}
+```
+
+The second relevant operation creates the proof for our witness. We declare our witness `c` as a `SudokuVerifier` struct and we pass it, along with the proving key `pk` and some randomness `rng`, to the `Groth16::<Bls12_381>::prove(&pk, c, &mut rng)` function. 
+
+
+```rust
+fn test_groth16<const N: usize>(
+    puzzle: &[[u8; N]; N],
+    solution: &[[u8; N]; N],
+)  {
+    
+    /// ...
+
+    println!("Creating proofs...");
+    let c = SudokuVerifier::<N> {
+        puzzle: puzzle,
+        solution: solution
+    };
+        
+    let proof = Groth16::<Bls12_381>::prove(&pk, c, &mut rng).unwrap();
+
+    // ...
+
+
+}
+```
+
+To verify that `proof` is correct we need to invoke the function `Groth16<Bls12_381>::verify(&vk, &public_input, &proof)`. The other inputs of the function are the verification key `vk` and a reference to an array containing the public inputs. 
+
+Note that, at a very low level, the `public_input` array must be filled with elements belonging to the prime field $F_q$ underlying the BLS12-381 G1 curve. Each element of $F_q$ represents a bit that represents a portion of the encoding of our input data. In our case, since each Puzzle (of dimension 2x2) is represented by 4 `UInt8` variables and every `UInt8` by 8 `Boolean` variables (representing bits), we need to have an array of public input of 32 elements (i.e., elemonts on $F_q$ representing bits).
+
+```rust
+fn test_groth16<const N: usize>(
+    puzzle: &[[u8; N]; N],
+    solution: &[[u8; N]; N],
+)  {
+    
+    /// ...
+
+
+    println!("Verifying the proof...");
+
+    let public_input =  [
+        Fr::from(1),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0), // 1
+        Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0), // 0
+        Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0), // 0
+        Fr::from(0),Fr::from(1),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0), // 2
+    ];
+
+    assert!(Groth16::<Bls12_381>::verify(&vk,  
+        &public_input, &proof,
+        // &[] 
+    ).unwrap());
+
+    println!("The proof is correct!");
+
+}
+```
+###  `Snark` trait
+<details>
+  <summary>See more</summary>
+
+`Groth16` implements the trait `SNARK` of the `ark_snark` crate (i.e., library).  In general, every proof system built on Arkworks implements this trait making for the developer the interaction with the system very simple and the code very modular. Indeed, this is one of the strength of Arkworks.
+    
+    
+```rust
+pub trait SNARK<F: PrimeField> {
+    /// The information required by the prover to produce a proof for a specific
+    /// circuit *C*.
+    type ProvingKey: Clone + CanonicalSerialize + CanonicalDeserialize;
+
+    /// The information required by the verifier to check a proof for a specific
+    /// circuit *C*.
+    type VerifyingKey: Clone + CanonicalSerialize + CanonicalDeserialize;
+
+    /// The proof output by the prover.
+    type Proof: Clone + CanonicalSerialize + CanonicalDeserialize;
+
+    /// This contains the verification key, but preprocessed to enable faster
+    /// verification.
+    type ProcessedVerifyingKey: Clone + CanonicalSerialize + CanonicalDeserialize;
+
+    /// Errors encountered during setup, proving, or verification.
+    type Error: 'static + ark_std::error::Error;
+
+    /// Takes in a description of a computation (specified in R1CS constraints),
+    /// and samples proving and verification keys for that circuit.
+    fn circuit_specific_setup<C: ConstraintSynthesizer<F>, R: RngCore + CryptoRng>(
+        circuit: C,
+        rng: &mut R,
+    ) -> Result<(Self::ProvingKey, Self::VerifyingKey), Self::Error>;
+
+    /// Generates a proof of satisfaction of the arithmetic circuit C (specified
+    /// as R1CS constraints).
+    fn prove<C: ConstraintSynthesizer<F>, R: RngCore + CryptoRng>(
+        circuit_pk: &Self::ProvingKey,
+        circuit: C,
+        rng: &mut R,
+    ) -> Result<Self::Proof, Self::Error>;
+
+    /// Checks that `proof` is a valid proof of the satisfaction of circuit
+    /// encoded in `circuit_vk`, with respect to the public input `public_input`,
+    /// specified as R1CS constraints.
+    fn verify(
+        circuit_vk: &Self::VerifyingKey,
+        public_input: &[F],
+        proof: &Self::Proof,
+    ) -> Result<bool, Self::Error> {
+        let pvk = Self::process_vk(circuit_vk)?;
+        Self::verify_with_processed_vk(&pvk, public_input, proof)
+    }
+
+    /// Preprocesses `circuit_vk` to enable faster verification.
+    fn process_vk(
+        circuit_vk: &Self::VerifyingKey,
+    ) -> Result<Self::ProcessedVerifyingKey, Self::Error>;
+
+    /// Checks that `proof` is a valid proof of the satisfaction of circuit
+    /// encoded in `circuit_pvk`, with respect to the public input `public_input`,
+    /// specified as R1CS constraints.
+    fn verify_with_processed_vk(
+        circuit_pvk: &Self::ProcessedVerifyingKey,
+        public_input: &[F],
+        proof: &Self::Proof,
+    ) -> Result<bool, Self::Error>;
+}
+```
+
+`Groth16` implements also the trait `CircuitSpecificSetupSNARK`. This trait is designed for those type of proof systems requiring a circuit specific setup. Those proof systems that has a universal setup implements the `UniversalSetupSNARK` trait. Both these traits inherits the `SNARK` trait. 
+    
+</details>
+    
 
 ## APPENDIX - Rust important concept for using ArkWorks
+
+In general, we suggest to have a basic knowledge of Rust and to read, at least, the first chapters (1,2) of [Programming Rust](https://github.com/francoposa/programming-rust/blob/main/Programming%20Rust%202nd%20Edition.pdf). However, in tihs appendix we provide all the basic reference to understand the tutorial analyzed.
 
 ### Rust setup
 
@@ -410,9 +605,9 @@ Install Rust in the following way:
 1. Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 2. To check that the installation was successfully run `rustc --version` and `cargo --version` and verify that everything went good.
 
-### Rust relevant capabilities to use Arkworks
+### Rust relevant facilities to use Arkworks
 
-#### Inherent implementations and Trait implementations (~OOP programming)
+#### Inherence and Trait implementations (~OOP programming)
 
 <details>
   <summary>See more</summary>

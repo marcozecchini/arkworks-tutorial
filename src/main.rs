@@ -5,14 +5,12 @@ use ark_r1cs_std::{
     prelude::{Boolean, EqGadget, AllocVar},
     uint8::UInt8,
 };
-use ark_bls12_381::{Bls12_381, Fr};
-
-
+use ark_bls12_381::{Fq as F, Bls12_381, Fr};
 use ark_groth16::Groth16;
-use ark_relations::r1cs::{ConstraintSynthesizer, SynthesisError, ConstraintSystemRef};
+use ark_relations::r1cs::{ConstraintSynthesizer, SynthesisError, ConstraintSystemRef, ConstraintSystem};
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
-
 use ark_std::rand::{SeedableRng, RngCore};
+
 use cmp::CmpGadget;
 
 mod cmp;
@@ -87,7 +85,6 @@ fn test_groth16<const N: usize>(
     let empty_value: u8 = 0;
     let row = [(); N].map(|_| empty_value);
     let puzzle_empty = [(); N].map(|_| row.clone()); 
-    println!("{:?}", puzzle_empty);
 
     // Create parameters for our circuit
     let (pk, vk) = {
@@ -104,12 +101,9 @@ fn test_groth16<const N: usize>(
         solution: solution
     };
 
-    println!("Verifying the proof...");
-    // Prepare the verification key (for proof verification)
-    let pvk = Groth16::<Bls12_381>::process_vk(&vk).unwrap();
-
     let proof = Groth16::<Bls12_381>::prove(&pk, c, &mut rng).unwrap();
-    
+
+    println!("Verifying the proof...");
 
     let public_input =  [
         Fr::from(1),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0), // 1
@@ -118,8 +112,8 @@ fn test_groth16<const N: usize>(
         Fr::from(0),Fr::from(1),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0),Fr::from(0), // 2
     ];
 
-    assert!(Groth16::<Bls12_381>::verify_proof(&pvk, &proof, 
-        &public_input 
+    assert!(Groth16::<Bls12_381>::verify(&vk,  
+        &public_input, &proof,
         // &[] 
     ).unwrap());
 
@@ -127,6 +121,19 @@ fn test_groth16<const N: usize>(
 
 }
 
+
+fn check_helper<const N: usize, ConstraintF: PrimeField>(
+    puzzle: &[[u8; N]; N],
+    solution: &[[u8; N]; N],
+) {
+    let cs = ConstraintSystem::<ConstraintF>::new_ref();
+    let puzzle_var = Puzzle::new_input(cs.clone(), || Ok(puzzle)).unwrap(); // || Ok(puzzle) is a closure
+    let solution_var = Solution::new_witness(cs.clone(), || Ok(solution)).unwrap();
+    check_puzzle_matches_solution(&puzzle_var, &solution_var).unwrap();
+    check_rows(&solution_var).unwrap();
+    assert!(cs.is_satisfied().unwrap());
+    println!("Check helper: the circuit and the witness are correct");
+}
 
 fn main()  {
     // Check that it accepts a valid solution.
@@ -138,6 +145,9 @@ fn main()  {
         [1, 2],
         [1, 2],
     ];
-
+    
+    println!("\n=======================================\n");
+    check_helper::<2, F>(&puzzle, &solution);
+    println!("\n=======================================\n");
     test_groth16::<2>(&puzzle, &solution);
 }
